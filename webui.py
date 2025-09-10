@@ -347,4 +347,7 @@ with gr.Blocks(title="IndexTTS Demo") as demo:
 
 if __name__ == "__main__":
     demo.queue(20)
-    demo.launch(server_name=cmd_args.host, server_port=cmd_args.port)
+    try:
+        demo.launch(server_name=cmd_args.host, server_port=cmd_args.port,inbrowser=True)
+    except:
+        demo.launch(server_name=cmd_args.host, server_port=cmd_args.port+1,inbrowser=True)
