@@ -1,6 +1,17 @@
 ##Vibecoded eng ver that returns audio from http://127.0.0.1:8000/synthesize as binary blob
 #https://github.com/index-tts/index-tts/pull/131
 #orig auth https://github.com/itltf512116
+
+# Modified by sipeter (https://github.com/sipeter):
+#
+# Modified for IndexTTS2:
+#   - 使用 IndexTTS2 替代 IndexTTS
+#   - 优化并发安全：所有端点使用 UUID 替代时间戳生成文件名，防止并发冲突
+#   - 临时文件改用系统临时目录 (tempfile.gettempdir())
+#   - 增加文件生成验证：检查输出文件存在性和大小
+#   - 增加 traceback 错误追踪，便于调试
+#   - 添加 CORS 中间件支持跨域请求
+#
 from fastapi import FastAPI, UploadFile, File, Form, Body, Query
 from fastapi.middleware.cors import CORSMiddleware # 导入
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -110,23 +121,19 @@ async def synthesize_speech(
         temp_audio.write(content)
         temp_audio_path = temp_audio.name
    
-    # Generate the output file path
-    output_path = os.path.join("outputs", f"api_synth_{int(time.time())}.wav")
+    # 【优化】使用 UUID 生成唯一的临时输出路径，防止并发冲突
+    temp_output_path = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}.wav")
    
     try:
-        # --- 修改点 3: 调整 infer 调用参数以适配 V2 ---
-        # V2 版本 infer 方法参数名有所变化，这里显式指定参数名以防万一
-        if infer_mode == "普通推理":
-            output = tts.infer(spk_audio_prompt=temp_audio_path, text=text, output_path=output_path)
-        else:
-            # 如果 IndexTTS2 没有 infer_fast，回退到普通 infer，或者根据库的实际情况调用
-            # 这里的调用方式假设 infer_fast 签名未变，或者暂时使用 infer 代替
-            # output = tts.infer_fast(temp_audio_path, text, output_path) 
-            # 保险起见，V2 API 建议统一使用 infer
-            output = tts.infer(spk_audio_prompt=temp_audio_path, text=text, output_path=output_path)
+        # 调用 TTS 模型进行合成 (V2 版本统一使用 infer)
+        tts.infer(spk_audio_prompt=temp_audio_path, text=text, output_path=temp_output_path)
+        
+        # 【优化】检查文件是否真的生成了并且有内容
+        if not os.path.exists(temp_output_path) or os.path.getsize(temp_output_path) == 0:
+            raise RuntimeError("TTS failed to generate a valid audio file.")
        
         # Read the generated audio file
-        with open(output, "rb") as audio_file:
+        with open(temp_output_path, "rb") as audio_file:
             audio_data = audio_file.read()
        
         # Return the audio data as a binary blob with appropriate content type
@@ -142,14 +149,11 @@ async def synthesize_speech(
             }
         )
     finally:
-        # Clean up the temporary file
-        os.unlink(temp_audio_path)
-        # Also clean up the output file if it exists
-        if os.path.exists(output_path):
-            try:
-                os.unlink(output_path)
-            except:
-                pass
+        # 【优化】清理临时文件
+        if os.path.exists(temp_audio_path):
+            os.unlink(temp_audio_path)
+        if os.path.exists(temp_output_path):
+            os.unlink(temp_output_path)
 
 
 class SynthesizeRequest(BaseModel):
@@ -181,24 +185,26 @@ async def synthesize_speech_by_filename(request: SynthesizeRequest = Body(...)):
             }
         )
    
-    # Generate the output file path
-    output_path = os.path.join("outputs", f"api_synth_{int(time.time())}.wav")
+    # 【优化】使用 UUID 生成唯一的临时输出路径，防止并发冲突
+    temp_output_path = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}.wav")
    
     try:
-        # --- 修改点 4: 调整 infer 调用参数以适配 V2 ---
-        if request.infer_mode == "普通推理":
-            output = tts.infer(spk_audio_prompt=prompt_audio_path, text=request.text, output_path=output_path)
-        else:
-            # 同上，保险起见统一使用 infer
-            output = tts.infer(spk_audio_prompt=prompt_audio_path, text=request.text, output_path=output_path)
+        # 调用 TTS 模型进行合成 (V2 版本统一使用 infer)
+        tts.infer(spk_audio_prompt=prompt_audio_path, text=request.text, output_path=temp_output_path)
+        
+        # 【优化】检查文件是否真的生成了并且有内容
+        if not os.path.exists(temp_output_path) or os.path.getsize(temp_output_path) == 0:
+            raise RuntimeError("TTS failed to generate a valid audio file.")
        
         # Read the generated audio file
-        with open(output, "rb") as audio_file:
+        with open(temp_output_path, "rb") as audio_file:
             audio_data = audio_file.read()
        
         # Return the audio data as a binary blob
         return Response(content=audio_data, media_type="audio/wav")
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return JSONResponse(
             status_code=500,
             content={
@@ -207,12 +213,9 @@ async def synthesize_speech_by_filename(request: SynthesizeRequest = Body(...)):
             }
         )
     finally:
-        # Clean up the generated file
-        if os.path.exists(output_path):
-            try:
-                os.unlink(output_path)
-            except:
-                pass
+        # 【优化】清理临时文件
+        if os.path.exists(temp_output_path):
+            os.unlink(temp_output_path)
 
 # ======================================================================================
 # START: 新增的 GET 端点 (最终修复版)
@@ -274,12 +277,9 @@ async def synthesize_speech_get(
             }
         )
     finally:
-        # 7. 【关键】无论成功还是失败，都确保删除临时文件
+        # 【优化】无论成功还是失败，都确保删除临时文件
         if os.path.exists(temp_output_path):
-            try:
-                os.unlink(temp_output_path)
-            except:
-                pass
+            os.unlink(temp_output_path)
 # ======================================================================================
 # END: 新增的 GET 端点
 # ======================================================================================
