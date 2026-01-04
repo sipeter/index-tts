@@ -4,7 +4,7 @@ setlocal
 
 echo =======================================================================
 echo ==                                                                   ==
-echo ==                      正在启动 IndexTTS 2 WebUI                     ==
+echo ==                      正在启动 IndexTTS 2 API                     ==
 echo ==                 (首次启动时加载模型较慢，请耐心等待)                 ==
 echo ==                                                                   ==
 echo =======================================================================
@@ -32,7 +32,7 @@ echo [INFO] 正在启动程序，请稍候...
 echo.
 
 REM --- 直接调用便携版 Python 运行程序 ---
-"%PYTHONEXECUTABLE%" -s webui.py
+"%PYTHONEXECUTABLE%" -s api.py 
 
 echo.
 echo 程序已退出。按任意键关闭此窗口。
